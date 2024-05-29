@@ -1,0 +1,158 @@
+import numpy as np
+import tensorflow as tf
+from keras.models import Sequential
+from keras.layers import SimpleRNN, Dense
+from keras.optimizers import Adam
+from keras.utils import to_categorical
+
+# Define the sequence
+sequence = [1, 3, 2, 3, 4, 3, 8,3]
+
+# Define the number dictionary (0-9)
+num_classes = 10
+
+# One-hot encode the sequence
+sequence = to_categorical(sequence, num_classes=num_classes)
+
+# Prepare the data
+def create_dataset(sequence, n_steps):
+    X, y = [], []
+    for i in range(len(sequence) - n_steps):
+        seq_x, seq_y = sequence[i:i+n_steps], sequence[i+n_steps]
+        X.append(seq_x)
+        y.append(seq_y)
+    return np.array(X), np.array(y)
+
+n_steps = 7
+X, y = create_dataset(sequence, n_steps)
+
+# Define the RNN model
+model = Sequential()
+model.add(SimpleRNN(10, activation='relu', return_sequences=True, input_shape=(n_steps, num_classes)))
+model.add(SimpleRNN(10, activation='relu', return_sequences=True))
+model.add(SimpleRNN(10, activation='relu', return_sequences=True))
+model.add(SimpleRNN(10, activation='relu', return_sequences=True))
+model.add(SimpleRNN(10, activation='relu', return_sequences=True))
+model.add(SimpleRNN(10, activation='relu'))
+model.add(Dense(num_classes, activation='softmax'))
+model.compile(optimizer=Adam(learning_rate=0.01), loss='categorical_crossentropy', metrics=['accuracy'])
+
+# Train the model
+model.fit(X, y, epochs=4, verbose=1)
+
+# Print the weights and biases
+for layer in model.layers:
+    print(f"Layer: {layer.name}")
+    weights = layer.get_weights()
+    if isinstance(layer, SimpleRNN):
+        kernel, recurrent_kernel, bias = weights
+        print(f"Kernel (input weights): {kernel}")
+        print(f"Recurrent Kernel (recurrent weights): {recurrent_kernel}")
+        print(f"Bias: {bias}")
+    elif isinstance(layer, Dense):
+        kernel, bias = weights
+        print(f"Kernel (weights): {kernel}")
+        print(f"Bias: {bias}")
+
+# Make a prediction
+test_input = np.array([to_categorical([1], num_classes=num_classes),
+                       to_categorical([3], num_classes=num_classes),
+                       to_categorical([2], num_classes=num_classes),to_categorical([3], num_classes=num_classes),to_categorical([4], num_classes=num_classes),to_categorical([3], num_classes=num_classes),to_categorical([4], num_classes=num_classes)])
+test_input = test_input.reshape((1, n_steps, num_classes))
+predicted_number = model.predict(test_input, verbose=0)
+
+print(f"Predicted next number: {np.argmax(predicted_number)}")
+
+
+import numpy as np
+import tensorflow as tf
+from keras.models import Sequential
+from keras.layers import SimpleRNN, Dense
+from keras.optimizers import Adam
+from keras.utils import to_categorical
+
+# Define the sequence
+sequence = [1, 3, 2, 3, 4, 3, 8]
+
+# Define the number dictionary (0-9)
+num_classes = 10
+
+# One-hot encode the sequence
+sequence = to_categorical(sequence, num_classes=num_classes)
+
+# Prepare the data
+def create_dataset(sequence, n_steps):
+    X, y = [], []
+    for i in range(len(sequence) - n_steps):
+        seq_x, seq_y = sequence[i:i+n_steps], sequence[i+n_steps]
+        X.append(seq_x)
+        y.append(seq_y)
+    return np.array(X), np.array(y)
+
+n_steps = 6
+X, y = create_dataset(sequence, n_steps)
+
+# Define the RNN model
+model = Sequential()
+model.add(SimpleRNN(10, activation='tanh', return_sequences=True, input_shape=(n_steps, num_classes)))
+model.add(SimpleRNN(10, activation='tanh', return_sequences=True))
+model.add(SimpleRNN(10, activation='tanh', return_sequences=True))
+model.add(SimpleRNN(10, activation='tanh', return_sequences=True))
+model.add(SimpleRNN(10, activation='tanh', return_sequences=True))
+model.add(SimpleRNN(10, activation='tanh', return_sequences=True))
+model.add(SimpleRNN(10, activation='tanh'))
+model.add(Dense(num_classes, activation='softmax'))
+model.compile(optimizer=Adam(learning_rate=0.01), loss='categorical_crossentropy', metrics=['accuracy'])
+
+# Train the model
+model.fit(X, y, epochs=4, verbose=1)
+
+# Print the weights and biases
+for layer in model.layers:
+    print(f"Layer: {layer.name}")
+    weights = layer.get_weights()
+    if isinstance(layer, SimpleRNN):
+        kernel, recurrent_kernel, bias = weights
+        print(f"Kernel (input weights): {kernel}")
+        print(f"Recurrent Kernel (recurrent weights): {recurrent_kernel}")
+        print(f"Bias: {bias}")
+    elif isinstance(layer, Dense):
+        kernel, bias = weights
+        print(f"Kernel (weights): {kernel}")
+        print(f"Bias: {bias}")
+
+# Define a function to manually compute the output of an RNN layer
+def rnn_layer_output(X, kernel, recurrent_kernel, bias):
+    # X: input data of shape (timesteps, input_dim)
+    # kernel: weights for the input data of shape (input_dim, units)
+    # recurrent_kernel: weights for the recurrent data of shape (units, units)
+    # bias: bias for the RNN layer of shape (units,)
+    timesteps, input_dim = X.shape
+    units = bias.shape[0]
+    h = np.zeros(units)
+    for t in range(timesteps):
+        h = np.dot(X[t], kernel) + np.dot(h, recurrent_kernel) + bias
+        h = np.maximum(h, 0)  # ReLU activation
+    return h
+
+# Make a prediction
+test_input = np.array([to_categorical([1], num_classes=num_classes),
+                       to_categorical([3], num_classes=num_classes),
+                       to_categorical([2], num_classes=num_classes),
+                       to_categorical([3], num_classes=num_classes),
+                       to_categorical([4], num_classes=num_classes),
+                       to_categorical([3], num_classes=num_classes)])
+test_input = test_input.reshape((1, n_steps, num_classes))
+
+# Get the weights of the first RNN layer
+rnn1_kernel, rnn1_recurrent_kernel, rnn1_bias = model.layers[6].get_weights()
+
+# Manually compute the output of the first RNN layer
+manual_output = rnn_layer_output(test_input[0], rnn1_kernel, rnn1_recurrent_kernel, rnn1_bias)
+print(f"Manual output of the first RNN layer: {manual_output}")
+
+# Predict using the model
+predicted_number = model.predict(test_input, verbose=0)
+print(f"Predicted next number: {np.argmax(predicted_number)}")
+
+model.layers[0].get_weights()

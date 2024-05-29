@@ -1,0 +1,74 @@
+import tensorflow as tf
+import numpy as np
+
+# Define the sequence
+sequence = [1, 3, 2, 3, 4, 3, 8]
+
+# Define model parameters
+num_layers = 6
+num_iterations = 10
+input_size = 10  # Represents numbers from 0 to 9
+hidden_size = 10
+output_size = 10  # Predicting the next number from 0 to 9
+
+# Initialize weights and biases
+input_weights = [tf.Variable(tf.random.normal([input_size, hidden_size]), name=f"input_weight_layer_{i}") for i in range(num_layers)]
+recurrent_weights = [tf.Variable(tf.random.normal([hidden_size, hidden_size]), name=f"recurrent_weight_layer_{i}") for i in range(num_layers)]
+output_weights = [tf.Variable(tf.random.normal([hidden_size, output_size]), name=f"output_weight_layer_{i}") for i in range(num_layers)]
+biases = tf.Variable(tf.zeros([hidden_size]), name="bias")
+
+# Define the RNN model
+def rnn(inputs):
+    states = []
+    input_activations = []
+    recurrent_activations = []
+    for i in range(num_layers):
+        if i == 0:
+            prev_state = tf.zeros([tf.shape(inputs)[0], hidden_size])
+        else:
+            prev_state = states[-1]
+
+        input_activation = tf.matmul(inputs, input_weights[i])
+        recurrent_activation = tf.matmul(prev_state, recurrent_weights[i])
+        state = tf.nn.tanh(input_activation + recurrent_activation + biases)
+        states.append(state)
+        input_activations.append(input_activation)
+        recurrent_activations.append(recurrent_activation)
+
+    outputs = [tf.matmul(states[i], output_weights[i]) for i in range(num_layers)]
+    return outputs, states, input_activations, recurrent_activations
+
+# Training loop
+for iteration in range(num_iterations):
+    with tf.GradientTape() as tape:
+        input_data = tf.constant(np.eye(input_size)[sequence[:-1]], dtype=tf.float32)
+        target_data = tf.constant(np.eye(output_size)[sequence[1:]], dtype=tf.float32)
+
+        predictions, _, _, _ = rnn(input_data)
+        loss = tf.reduce_mean([tf.reduce_mean(tf.square(predictions[i] - target_data)) for i in range(num_layers)])
+
+    gradients = tape.gradient(loss, input_weights + recurrent_weights + output_weights + [biases])
+    optimizer = tf.keras.optimizers.Adam(learning_rate=0.01)
+    optimizer.apply_gradients(zip(gradients, input_weights + recurrent_weights + output_weights + [biases]))
+
+# Print final weights and biases
+print("Final Input Weights:")
+for i, weight in enumerate(input_weights):
+    print(f"Layer {i+1}: {weight.numpy()}")
+
+print("\nFinal Recurrent Weights:")
+for i, weight in enumerate(recurrent_weights):
+    print(f"Layer {i+1}: {weight.numpy()}")
+
+print("\nFinal Output Weights:")
+for i, weight in enumerate(output_weights):
+    print(f"Layer {i+1}: {weight.numpy()}")
+
+print("\nFinal Biases:")
+print(biases.numpy())
+
+# Print weights for each layer used to calculate the output
+print("\nWeights for each layer used to calculate the output:")
+for i in range(num_layers):
+    print(f"Layer {i+1} input weight: {input_weights[i].numpy()}")
+    print(f"Layer {i+1} recurrent weight: {recurrent_weights[i].numpy()}")
