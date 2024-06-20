@@ -1,0 +1,147 @@
+from transformers import AutoTokenizer, AutoModelForCausalLM
+import sqlite3
+
+
+tokenizer = AutoTokenizer.from_pretrained("./nsql")
+model = AutoModelForCausalLM.from_pretrained("./nsql")
+
+# Load tokenizer and model
+term_mapping = {
+    "no precipitation": "NULL",
+    "precipitation": "rain",
+    "snowfall": "snow",
+    "breezy and little cloudy": "Breezy and Partly Cloudy",
+    "breezy and cloudy": "Breezy and Mostly Cloudy",
+    "breezy and overcast": "Breezy and Overcast",
+    "humid and little cloudy": "Humid and Partly Cloudy",
+    "humid and cloudy": "Humid and Mostly Cloudy",
+    "windy and little cloudy": "Windy and Partly Cloudy",
+    "dry and little cloudy": "Dry and Partly Cloudy",
+    "very windy and little cloudy": "Dangerously Windy and Partly Cloudy",
+    "little cloudy": "Partly Cloudy",
+    "dry and cloudy": "Dry and Mostly Cloudy",
+    "windy and cloudy": "Windy and Mostly Cloudy",
+    "cloudy": "Mostly Cloudy",
+    
+}
+
+# List of valid summary terms from the database schema
+valid_summaries = [
+    'Partly Cloudy', 'Mostly Cloudy', 'Overcast', 'Foggy', 'Breezy and Mostly Cloudy', 'Clear',
+    'Breezy and Partly Cloudy', 'Breezy and Overcast', 'Humid and Mostly Cloudy', 'Humid and Partly Cloudy',
+    'Windy and Foggy', 'Windy and Overcast', 'Breezy and Foggy', 'Windy and Partly Cloudy', 'Breezy',
+    'Dry and Partly Cloudy', 'Windy and Mostly Cloudy', 'Dangerously Windy and Partly Cloudy', 'Dry',
+    'Windy', 'Humid and Overcast', 'Light Rain', 'Drizzle', 'Windy and Dry', 'Dry and Mostly Cloudy',
+    'Breezy and Dry', 'Rain'
+]
+
+# List of valid precip_type terms from the database schema
+valid_precip_types = ['rain', 'snow', 'NULL']
+
+# Function to replace terms in user input if they are valid summary or precip_type terms
+def replace_terms(text, mapping, valid_summary_terms, valid_precip_terms):
+    for key, value in mapping.items():
+        if key in text:
+            if value in valid_summary_terms:
+                text = text.replace(key, f"summary = '{value}'")
+            elif value in valid_precip_terms:
+                text = text.replace(key, f"precip_type = '{value}'")
+    return text
+
+
+# Sample user query
+user_query = "top 10 least humidity when temperature is more then 35 "
+
+# Replace terms based on the mapping
+processed_query = replace_terms(user_query, term_mapping, valid_summaries, valid_precip_types)
+
+# Add the few-shot examples and the processed query to the prompt
+text = f""" {{
+  "myapps_weather": {{
+      "columns": {{
+        "id":"PRIMARY KEY INTEGER",
+        "formatted_date": "datetime",
+        "summary": "ENUM('Partly Cloudy','Mostly Cloudy','Overcast', 'Foggy','Breezy and Mostly Cloudy','Clear', 'Breezy and Partly Cloudy','Breezy and Overcast','Humid and Mostly Cloudy','Humid and Partly Cloudy','Windy and Foggy','Windy and Overcast','Breezy and Foggy','Windy and Partly Cloudy','Breezy','Dry and Partly Cloudy','Windy and Mostly Cloudy','Dangerously Windy and Partly Cloudy','Dry','Windy','Humid and Overcast','Light Rain','Drizzle','Windy and Dry','Dry and Mostly Cloudy','Breezy and Dry','Rain')",
+        "temperature_c": "REAL",
+        "precip_type": "ENUM('rain', 'snow', 'NULL')",
+        "apparent_temperature_c": "REAL",
+        "humidity":"REAL",
+        "wind_speed_kmh":"REAL",
+        "wind_bearing_degrees":"INTEGER",
+        "visibilty_km":"REAL",
+        "loud_cover":"REAL",
+        "pressure_millibars":"REAL",
+        "daily_summary":"TEXT"
+      }}
+    }}
+  }}
+
+-- Using valid SQLite, answer the following questions for the tables provided above.
+
+-- Example 1: temperature when precipitation is expected
+SELECT temperature_c FROM myapps_weather WHERE precip_type = 'rain';
+
+-- Example 2: temperature when it is clear
+SELECT temperature_c FROM myapps_weather WHERE summary = 'Clear';
+
+-- Example 3: temperature when it is partly cloudy
+SELECT temperature_c FROM myapps_weather WHERE summary = 'Partly Cloudy';
+
+
+
+-- {processed_query}
+"""
+
+# Tokenize input
+input_ids = tokenizer(text, return_tensors="pt").input_ids
+
+# Generate output
+generated_ids = model.generate(input_ids, max_length=512)
+generated_query = tokenizer.decode(generated_ids[0], skip_special_tokens=True).strip()
+
+# Ensure the generated query is a single statement
+generated_query = generated_query.split('\n')[-1]  # Get the last line, which should be the query
+
+# Define the function to query the database
+def query_database(db_path, query):
+    """
+    Connects to the SQLite database, executes the given query, and fetches the results.
+
+    Parameters:
+    db_path (str): The absolute path to the database file.
+    query (str): The SQL query to execute.
+
+    Returns:
+    list: A list of tuples containing the query results.
+    """
+    try:
+        # Connect to the database
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+        
+        # Execute the query
+        cursor.execute(query)
+        
+        # Fetch all the results
+        results = cursor.fetchall()
+        
+        # Close the connection
+        conn.close()
+        
+        return results
+    
+    except sqlite3.Error as e:
+        print(f"An error occurred: {e}")
+        return []
+
+# Example usage
+if __name__ == "__main__":
+    # Absolute path to the SQLite database file
+    db_path = r'db.sqlite3'
+    
+    # SQL query to execute
+    query = generated_query  # Use the generated query
+    
+    results = query_database(db_path, query)
+    for row in results:
+        print(row)
