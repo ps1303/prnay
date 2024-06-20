@@ -1,0 +1,313 @@
+from django.shortcuts import render, redirect, get_object_or_404
+from django.http import HttpResponse, JsonResponse
+from django import forms
+from .models import Inventory, Weather, Movie
+import csv
+import os
+import sqlite3
+from transformers import AutoTokenizer, AutoModelForCausalLM
+from pptx import Presentation
+from pptx.util import Inches
+from docx import Document
+import json
+import xml.etree.ElementTree as ET
+from .models import QueryHistory
+
+
+tokenizer = AutoTokenizer.from_pretrained("./nsql")
+model = AutoModelForCausalLM.from_pretrained("./nsql")
+
+# Define InventoryForm class
+class InventoryForm(forms.ModelForm):
+    class Meta:
+        model = Inventory
+        fields = ['product_name', 'quantity_in_stock', 'cost_per_item', 'quantity_sold', 'sales', 'stock_date', 'photos']
+        widgets = {
+            'stock_date': forms.DateInput(attrs={'type': 'date'}),
+        }
+
+# Define QueryForm class
+class QueryForm(forms.Form):
+    query = forms.CharField(label='Enter your natural language query', max_length=200)
+
+# Load the ML model and tokenizer
+term_mapping = {
+    "rainfall": "rain",
+    "no precipitation": "NULL",
+    "precipitation": "rain",
+    "snowfall": "snow",
+    "breezy and little cloudy": "Breezy and Partly Cloudy",
+    "breezy and cloudy": "Breezy and Mostly Cloudy",
+    "breezy and overcast": "Breezy and Overcast",
+    "humid and little cloudy": "Humid and Partly Cloudy",
+    "humid and cloudy": "Humid and Mostly Cloudy",
+    "windy and little cloudy": "Windy and Partly Cloudy",
+    "dry and little cloudy": "Dry and Partly Cloudy",
+    "very windy and little cloudy": "Dangerously Windy and Partly Cloudy",
+    "little cloudy": "Partly Cloudy",
+    "little rain": "Light Rain",
+    "dry and cloudy": "Dry and Mostly Cloudy",
+    "windy and cloudy": "Windy and Mostly Cloudy",
+    "cloudy": "Mostly Cloudy",
+}
+
+# List of valid summary terms from the database schema
+valid_summaries = [
+    'Partly Cloudy', 'Mostly Cloudy', 'Overcast', 'Foggy', 'Breezy and Mostly Cloudy', 'Clear',
+    'Breezy and Partly Cloudy', 'Breezy and Overcast', 'Humid and Mostly Cloudy', 'Humid and Partly Cloudy',
+    'Windy and Foggy', 'Windy and Overcast', 'Breezy and Foggy', 'Windy and Partly Cloudy', 'Breezy',
+    'Dry and Partly Cloudy', 'Windy and Mostly Cloudy', 'Dangerously Windy and Partly Cloudy', 'Dry',
+    'Windy', 'Humid and Overcast', 'Light Rain', 'Drizzle', 'Windy and Dry', 'Dry and Mostly Cloudy',
+    'Breezy and Dry', 'Rain'
+]
+
+valid_precip_types = ['rain', 'snow', 'NULL']
+
+def replace_terms(text, mapping, valid_summary_terms, valid_precip_terms):
+    for key, value in mapping.items():
+        if key in text:
+            if value in valid_summary_terms:
+                text = text.replace(key, f"summary = '{value}'")
+            elif value in valid_precip_terms:
+                text = text.replace(key, f"precip_type = '{value}'")
+    return text
+
+def query_database(db_path, query):
+    try:
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+        cursor.execute(query)
+        results = cursor.fetchall()
+        conn.close()
+        return results
+    except sqlite3.Error as e:
+        print(f"An error occurred: {e}")
+        return []
+
+def get_sql_query(question):
+    processed_query = replace_terms(question, term_mapping, valid_summaries, valid_precip_types)
+
+    text = f""" {{
+    "myapps_weather": {{
+        "columns": {{
+            "id":"PRIMARY KEY INTEGER",
+            "formatted_date": "datetime",
+            "summary": "ENUM('Partly Cloudy','Mostly Cloudy','Overcast', 'Foggy','Breezy and Mostly Cloudy','Clear', 'Breezy and Partly Cloudy','Breezy and Overcast','Humid and Mostly Cloudy','Humid and Partly Cloudy','Windy and Foggy','Windy and Overcast','Breezy and Foggy','Windy and Partly Cloudy','Breezy','Dry and Partly Cloudy','Windy and Mostly Cloudy','Dangerously Windy and Partly Cloudy','Dry','Windy','Humid and Overcast','Light Rain','Drizzle','Windy and Dry','Dry and Mostly Cloudy','Breezy and Dry','Rain')",
+            "temperature_c": "REAL",
+            "precip_type": "ENUM('rain', 'snow', 'NULL')",
+            "apparent_temperature_c": "REAL",
+            "humidity":"REAL",
+            "wind_speed_kmh":"REAL",
+            "wind_bearing_degrees":"INTEGER",
+            "visibilty_km":"REAL",
+            "loud_cover":"REAL",
+            "pressure_millibars":"REAL",
+            "daily_summary":"TEXT"
+        }}
+        }}
+    }}
+
+    -- Using valid SQLite, answer the following questions for the tables provided above.
+
+    -- Example 1: temperature when precipitation is expected
+    SELECT temperature_c FROM myapps_weather WHERE precip_type = 'rain';
+
+    -- Example 2: temperature when it is clear
+    SELECT temperature_c FROM myapps_weather WHERE summary = 'Clear';
+
+    -- Example 3: temperature when it is partly cloudy
+    SELECT temperature_c FROM myapps_weather WHERE summary = 'Partly Cloudy';
+
+
+
+    -- {processed_query}
+    """
+
+    # Tokenize input
+    input_ids = tokenizer(text, return_tensors="pt").input_ids
+
+    # Generate output
+    generated_ids = model.generate(input_ids, max_length=512)
+    generated_text = tokenizer.decode(generated_ids[0], skip_special_tokens=True)
+    generated_query = generated_text.split('\n')[-1]
+    return generated_query
+
+def download_csv(results):
+    response = HttpResponse(content_type='text/csv')
+    response['Content-Disposition'] = 'attachment; filename="results.csv"'
+    writer = csv.writer(response)
+    if results:
+        headers = results[0].keys()
+        writer.writerow(headers)
+        for row in results:
+            writer.writerow(row.values())
+    return response
+
+def download_word(results):
+    document = Document()
+    document.add_heading('Query Results', 0)
+    if results:
+        headers = results[0].keys()
+        table = document.add_table(rows=1, cols=len(headers))
+        hdr_cells = table.rows[0].cells
+        for i, header in enumerate(headers):
+            hdr_cells[i].text = header
+        for row in results:
+            row_cells = table.add_row().cells
+            for i, value in enumerate(row.values()):
+                row_cells[i].text = str(value)
+    document_path = 'query_results.docx'
+    document.save(document_path)
+    with open(document_path, 'rb') as docx_file:
+        response = HttpResponse(docx_file.read(), content_type='application/vnd.openxmlformats-officedocument.wordprocessingml.document')
+        response['Content-Disposition'] = 'attachment; filename=query_results.docx'
+    return response
+
+def download_ppt(results):
+    prs = Presentation()
+    slide_layout = prs.slide_layouts[5]
+    slide = prs.slides.add_slide(slide_layout)
+    title = slide.shapes.title
+    title.text = "Query Results"
+    if not results:
+        return HttpResponse("No results found")
+    headers = results[0].keys()
+    table = slide.shapes.add_table(rows=len(results) + 1, cols=len(headers), left=Inches(0.5), top=Inches(1.5), width=Inches(9), height=Inches(0.8)).table
+    for i, header in enumerate(headers):
+        table.cell(0, i).text = header
+    for i, row in enumerate(results):
+        for j, value in enumerate(row.values()):
+            table.cell(i + 1, j).text = str(value)
+    response = HttpResponse(content_type='application/vnd.openxmlformats-officedocument.presentationml.presentation')
+    response['Content-Disposition'] = 'attachment; filename="results.pptx"'
+    prs.save(response)
+    return response
+
+def download_history_xml(request):
+    # query_history = request.session.get('query_history', [])
+    user_id = 1
+    query_history = QueryHistory.objects.filter(user_id=user_id).values('query_history')
+    if query_history:
+        query_history = query_history[0]['query_history']
+    else:
+        query_history = []
+    root = ET.Element('QueryHistory')
+    for item in query_history:
+        entry = ET.SubElement(root, 'Entry')
+        question = ET.SubElement(entry, 'Question')
+        question.text = item['question']
+        sql_query = ET.SubElement(entry, 'SQLQuery')
+        sql_query.text = item['sql_query']
+        results = ET.SubElement(entry, 'Results')
+        if isinstance(item['results'], str):
+            result_entry = ET.SubElement(results, 'Result')
+            result_field = ET.SubElement(result_entry, 'Error')
+            result_field.text = item['results']
+        else:
+            for result in item['results']:
+                result_entry = ET.SubElement(results, 'Result')
+                for key, value in result.items():
+                    result_field = ET.SubElement(result_entry, key)
+                    result_field.text = str(value)
+    xml_str = ET.tostring(root, encoding='utf-8')
+    response = HttpResponse(xml_str, content_type='application/xml')
+    response['Content-Disposition'] = 'attachment; filename=query_history.xml'
+    return response
+
+def clear_history(request):
+    # if 'query_history' in request.session:
+        # del request.session['query_history']
+    # delete all query history where user_id = user_id
+    user_id = 1
+    QueryHistory.objects.filter(user_id=user_id).delete()
+    return redirect('query_view')
+
+def query_view(request):
+    results = None
+    sql_query = None
+    query_history = []
+    name = 'bhavesh'
+    user_id = 1
+    query_history = QueryHistory.objects.filter(user_id=user_id).values('query_history')
+    if query_history:
+        query_history = query_history[0]['query_history']
+    else:
+        query_history = []
+    print(query_history)
+
+    if request.method == 'POST':
+        form = QueryForm(request.POST)
+        if form.is_valid():
+            question = form.cleaned_data['query']
+            sql_query = get_sql_query(question)
+            db_path = os.path.join('db.sqlite3')
+            results = query_database(db_path, sql_query)
+            query_history.insert(0, {'question': question, 'sql_query': sql_query, 'results': results})
+            if QueryHistory.objects.filter(user_id=user_id).exists():
+                QueryHistory.objects.filter(user_id=user_id).update(query_history=query_history)
+            else:
+                QueryHistory.objects.create(user_id=user_id, query_history=query_history)
+            if 'csv' in request.POST:
+                return download_csv(results)
+            elif 'word' in request.POST:
+                return download_word(results)
+            elif 'ppt' in request.POST:
+                return download_ppt(results)
+            response_data = {
+                'form': form, 
+                'results': results, 
+                'query': sql_query, 
+                'query_history': query_history,
+                'results_json': json.dumps(results)  # Pass the results as JSON
+                , 'username': name
+            }
+            return render(request, 'query_view.html', response_data)
+    else:
+        form = QueryForm()
+        if 'load_history' in request.GET:
+            index = int(request.GET['load_history'])
+            history_item = query_history[index]
+            form = QueryForm(initial={'query': history_item['question']})
+            sql_query = history_item['sql_query']
+            results = history_item['results']
+    return render(request, 'query_view.html', {'form': form, 'results': results, 'query': sql_query, 'query_history': query_history, 'username': name})
+
+def inventory_list(request):
+    inventory_items = Inventory.objects.all()
+    return render(request, 'inventory_list.html', {'inventory_items': inventory_items})
+
+def weather_list(request):
+    weather_data = Weather.objects.all()
+    return render(request, 'weather_list.html', {'weather_data': weather_data})
+
+def weather_detail(request, pk):
+    weather = get_object_or_404(Weather, pk=pk)
+    return render(request, 'weather_detail.html', {'weather': weather})
+
+def export_weather_csv(request):
+    response = HttpResponse(content_type='text/csv')
+    response['Content-Disposition'] = 'attachment; filename="weather.csv"'
+
+    writer = csv.writer(response)
+    writer.writerow(['Formatted Date', 'Summary', 'Precip Type', 'Temperature (C)', 
+                     'Apparent Temperature (C)', 'Humidity', 'Wind Speed (km/h)', 
+                     'Wind Bearing (degrees)', 'Visibility (km)', 'Cloud Cover', 
+                     'Pressure (millibars)', 'Daily Summary'])
+
+    for weather in Weather.objects.all():
+        writer.writerow([
+            weather.formatted_date, 
+            weather.summary, 
+            weather.precip_type, 
+            weather.temperature_c, 
+            weather.apparent_temperature_c, 
+            weather.humidity, 
+            weather.wind_speed_kmh, 
+            weather.wind_bearing_degrees, 
+            weather.visibility_km, 
+            weather.cloud_cover, 
+            weather.pressure_millibars, 
+            weather.daily_summary
+        ])
+
+    return response
