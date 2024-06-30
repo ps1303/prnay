@@ -1,0 +1,228 @@
+from transformers import AutoTokenizer, AutoModelForCausalLM
+
+# Load tokenizer and model
+tokenizer = AutoTokenizer.from_pretrained("./nsql2")
+model = AutoModelForCausalLM.from_pretrained("./nsql2")
+
+user_query = "tracks by ac/dc"
+
+text = f"""
+Schema:
+Album:
+    AlbumId: PRIMARY KEY INTEGER,
+    Title: NVARCHAR(160),
+    ArtistId: FOREIGN KEY INTEGER,
+    FOREIGN KEY (ArtistId) REFERENCES Artist(ArtistId)
+Artist:
+    ArtistId: PRIMARY KEY INTEGER,
+    Name: NVARCHAR(120)
+Customer:
+    CustomerId: PRIMARY KEY INTEGER,
+    FirstName: NVARCHAR(40),
+    LastName: NVARCHAR(20),
+    Company: NVARCHAR(80),
+    Address: NVARCHAR(70),
+    City: NVARCHAR(40),
+    State: NVARCHAR(40),
+    Country: NVARCHAR(40),
+    PostalCode: NVARCHAR(10),
+    Phone: NVARCHAR(24),
+    Fax: NVARCHAR(24),
+    Email: NVARCHAR(60),
+    SupportRepId: FOREIGN KEY INTEGER,
+    FOREIGN KEY (SupportRepId) REFERENCES Employee(EmployeeId)
+Employee:
+    EmployeeId: PRIMARY KEY INTEGER,
+    LastName: NVARCHAR(20),
+    FirstName: NVARCHAR(20),
+    Title: NVARCHAR(30),
+    ReportsTo: FOREIGN KEY INTEGER,
+    BirthDate: DATETIME,
+    HireDate: DATETIME,
+    Address: NVARCHAR(70),
+    City: NVARCHAR(40),
+    State: NVARCHAR(40),
+    Country: NVARCHAR(40),
+    PostalCode: NVARCHAR(10),
+    Phone: NVARCHAR(24),
+    Fax: NVARCHAR(24),
+    Email: NVARCHAR(60),
+    FOREIGN KEY (ReportsTo) REFERENCES Employee(EmployeeId)
+Genre:
+    GenreId: PRIMARY KEY INTEGER,
+    Name: NVARCHAR(120)
+Invoice:
+    InvoiceId: PRIMARY KEY INTEGER,
+    CustomerId: FOREIGN KEY INTEGER,
+    InvoiceDate: DATETIME,
+    BillingAddress: NVARCHAR(70),
+    BillingCity: NVARCHAR(40),
+    BillingState: NVARCHAR(40),
+    BillingCountry: NVARCHAR(40),
+    BillingPostalCode: NVARCHAR(10),
+    Total: NUMERIC(10,2),
+    FOREIGN KEY (CustomerId) REFERENCES Customer(CustomerId)
+InvoiceLine:
+    InvoiceLineId: PRIMARY KEY INTEGER,
+    InvoiceId: FOREIGN KEY INTEGER,
+    TrackId: FOREIGN KEY INTEGER,
+    UnitPrice: NUMERIC(10,2),
+    Quantity: INTEGER,
+    FOREIGN KEY (InvoiceId) REFERENCES Invoice(InvoiceId),
+    FOREIGN KEY (TrackId) REFERENCES Track(TrackId)
+MediaType:
+    MediaTypeId: PRIMARY KEY INTEGER,
+    Name: NVARCHAR(120)
+Playlist:
+    PlaylistId: PRIMARY KEY INTEGER,
+    Name: NVARCHAR(120),
+    FOREIGN KEY (PlaylistId) REFERENCES PlaylistTrack(PlaylistId)
+PlaylistTrack:
+    PlaylistId: FOREIGN KEY INTEGER,
+    TrackId: FOREIGN KEY INTEGER,
+    FOREIGN KEY (PlaylistId) REFERENCES Playlist(PlaylistId),
+    FOREIGN KEY (TrackId) REFERENCES Track(TrackId)
+Track:
+    TrackId: PRIMARY KEY INTEGER,
+    Name: NVARCHAR(200),
+    AlbumId: FOREIGN KEY INTEGER,
+    MediaTypeId: FOREIGN KEY INTEGER,
+    GenreId: FOREIGN KEY INTEGER,
+    Composer: NVARCHAR(220),
+    Milliseconds: INTEGER,
+    Bytes: INTEGER,
+    UnitPrice: NUMERIC(10,2),
+    FOREIGN KEY (AlbumId) REFERENCES Album(AlbumId),
+    FOREIGN KEY (MediaTypeId) REFERENCES MediaType(MediaTypeId),
+    FOREIGN KEY (GenreId) REFERENCES Genre(GenreId)
+
+-- Using valid SQLite, answer the following questions for the tables provided above.
+
+-- Examples of SQL Queries:
+
+-- Example 1: Get all tracks by a specific artist
+SELECT A.Name AS ArtistName, T.Name AS TrackName FROM Artist A JOIN Album Al ON A.ArtistId = Al.ArtistId JOIN Track T ON Al.AlbumId = T.AlbumId WHERE A.Name = 'Specific Artist';
+
+-- Example 2: Get customer invoices for customer with id 1
+SELECT C.FirstName, C.LastName, I.InvoiceDate, I.Total FROM Customer C JOIN Invoice I ON C.CustomerId = I.CustomerId WHERE C.CustomerId = 1;
+
+-- Example 3: Get playlist details including track information
+SELECT P.Name AS PlaylistName, T.Name AS TrackName,T.Composer AS Composer FROM Playlist P JOIN PlaylistTrack PT ON P.PlaylistId = PT.PlaylistId JOIN Track T ON PT.TrackId = T.TrackId WHERE P.Name = 'Specific Playlist';
+
+-- Example 4: Get employee hierarchy
+SELECT E1.FirstName AS Employee, E2.FirstName AS Manager FROM Employee E1 LEFT JOIN Employee E2 ON E1.ReportsTo = E2.EmployeeId;
+
+-- Example 5: Get all albums and their tracks
+SELECT Al.Title AS AlbumTitle, T.Name AS TrackName FROM Album Al JOIN Track T ON Al.AlbumId = T.AlbumId;
+
+-- Example 6: Get all customers and their assigned support representatives
+SELECT C.FirstName AS CustomerFirstName, C.LastName AS CustomerLastName, E.FirstName AS SupportRepFirstName, E.LastName AS SupportRepLastName FROM Customer C JOIN Employee E ON C.SupportRepId = E.EmployeeId;
+
+-- Example 7: Get the number of tracks per genre
+SELECT G.Name AS GenreName, COUNT(T.TrackId) AS TrackCount FROM Genre G JOIN Track T ON G.GenreId = T.GenreId GROUP BY G.Name;
+
+-- Example 8: give all the songs released by ac/dc
+SELECT T.Name AS TrackName FROM Artist A JOIN Album Al ON A.ArtistId = Al.ArtistId JOIN Track T ON Al.AlbumId = T.AlbumId WHERE A.Name = 'AC/DC';
+
+-- Example 9: most famous/listened song by frank sinatra
+SELECT T.Name AS TrackName, COUNT(IL.TrackId) AS ListenCount FROM Artist A JOIN Album Al ON A.ArtistId = Al.ArtistId JOIN Track T ON Al.AlbumId = T.AlbumId JOIN InvoiceLine IL ON T.TrackId = IL.TrackId WHERE A.Name = 'Frank Sinatra' GROUP BY T.Name ORDER BY ListenCount DESC LIMIT 1;
+
+-- Example 10: Get all media types and their tracks
+SELECT M.Name AS MediaTypeName, T.Name AS TrackName FROM MediaType M JOIN Track T ON M.MediaTypeId = T.MediaTypeId;
+
+-- Example 11: all albums released by led zeppelin
+SELECT Al.Title AS AlbumTitle FROM Artist A JOIN Album Al ON A.ArtistId = Al.ArtistId WHERE A.Name = 'Led Zeppelin';
+
+-- Example 12: who released the album out of time
+SELECT A.Name AS ArtistName FROM Artist A JOIN Album Al ON A.ArtistId = Al.ArtistId WHERE Al.Title = 'Out of Time';
+
+-- Example 13: Get customers and their corresponding invoices
+SELECT C.FirstName, C.LastName, I.InvoiceDate, I.Total FROM Customer C JOIN Invoice I ON C.CustomerId = I.CustomerId;
+
+-- Example 14: invoice for a person/customer named Daan Peeters
+SELECT I.InvoiceId, I.InvoiceDate, I.Total FROM Customer C JOIN Invoice I ON C.CustomerId = I.CustomerId WHERE C.FirstName = 'Daan' AND C.LastName = 'Peeters';
+
+-- Example 15: Get track details along with media type
+SELECT T.Name AS TrackName, M.Name AS MediaTypeName FROM Track T JOIN MediaType M ON T.MediaTypeId = M.MediaTypeId;
+
+-- Example 16: Get all tracks and their genres
+SELECT T.Name AS TrackName, G.Name AS GenreName FROM Track T JOIN Genre G ON T.GenreId = G.GenreId;
+
+-- Example 17: Get all albums and their artists
+SELECT Al.Title AS AlbumTitle, A.Name AS ArtistName FROM Album Al JOIN Artist A ON Al.ArtistId = A.ArtistId;
+
+-- Example 18: Get all employees and their titles
+SELECT E.FirstName AS EmployeeFirstName, E.LastName AS EmployeeLastName, E.Title AS EmployeeTitle FROM Employee E;
+
+-- Example 19: title of the employee andrew adams
+SELECT E.Title FROM Employee E WHERE E.FirstName = 'Andrew' AND E.LastName = 'Adams';
+
+-- Example 20: Get all playlists and their tracks
+SELECT P.Name AS PlaylistName, T.Name AS TrackName FROM Playlist P JOIN PlaylistTrack PT ON P.PlaylistId = PT.PlaylistId JOIN Track T ON PT.TrackId = T.TrackId;
+
+-- Example 21: Get all invoices and their total amounts
+SELECT I.InvoiceId, I.Total FROM Invoice I;
+
+-- Example 22: total amount for invoice by the customer named frank haris
+SELECT SUM(I.Total) AS TotalAmount FROM Customer C JOIN Invoice I ON C.CustomerId = I.CustomerId WHERE C.FirstName = 'Frank' AND C.LastName = 'Haris';
+
+-- Example 23: Get all customers and their phone numbers
+SELECT C.FirstName AS CustomerFirstName, C.LastName AS CustomerLastName, C.Phone AS CustomerPhone FROM Customer C;
+
+-- Example 24: Get all tracks and their composers
+SELECT T.Name AS TrackName, T.Composer AS TrackComposer FROM Track T;
+
+-- Example 25: composer of the track what it takes
+SELECT T.Composer FROM Track T WHERE T.Name = 'What It Takes';
+
+-- Example 26: Get all employees and their managers
+SELECT E1.FirstName AS EmployeeFirstName, E1.LastName AS EmployeeLastName, E2.FirstName AS ManagerFirstName, E2.LastName AS ManagerLastName FROM Employee E1 LEFT JOIN Employee E2 ON E1.ReportsTo = E2.EmployeeId;
+
+-- Example 27: manager of laura callahan
+SELECT E2.FirstName AS ManagerFirstName, E2.LastName AS ManagerLastName FROM Employee E1 JOIN Employee E2 ON E1.ReportsTo = E2.EmployeeId WHERE E1.FirstName = 'Laura' AND E1.LastName = 'Callahan';
+
+-- Example 28: Get all customers and their support representatives
+SELECT C.FirstName AS CustomerFirstName, C.LastName AS CustomerLastName, E.FirstName AS SupportRepFirstName, E.LastName AS SupportRepLastName FROM Customer C JOIN Employee E ON C.SupportRepId = E.EmployeeId;
+
+-- Example 29: support representative for the customer daan peeters
+SELECT E.FirstName AS SupportRepFirstName, E.LastName AS SupportRepLastName FROM Customer C JOIN Employee E ON C.SupportRepId = E.EmployeeId WHERE C.FirstName = 'Daan' AND C.LastName = 'Peeters';
+
+-- Example 30: Get all albums and their track counts
+SELECT Al.Title AS AlbumTitle, COUNT(T.TrackId) AS TrackCount FROM Album Al JOIN Track T ON Al.AlbumId = T.AlbumId GROUP BY Al.Title;
+
+-- Example 31: Get all invoices and their customers
+SELECT I.InvoiceId, C.FirstName AS CustomerFirstName, C.LastName AS CustomerLastName FROM Invoice I JOIN Customer C ON I.CustomerId = C.CustomerId;
+
+-- Example 32: Get all tracks and their lengths
+SELECT T.Name AS TrackName, T.Milliseconds AS TrackLength FROM Track T;
+
+-- Example 33: length of the track Breaking the rules
+SELECT T.Milliseconds AS TrackLength FROM Track T WHERE T.Name = 'Breaking The Rules';
+
+-- Your Query: {user_query}
+"""
+
+# Split the input text into smaller chunks
+max_chunk_size = 1500  # Chunks of size within the limit
+chunks = [text[i:i + max_chunk_size] for i in range(0, len(text), max_chunk_size)]
+
+generated_texts = []
+
+for chunk in chunks:
+    # Tokenize input
+    input_ids = tokenizer(chunk, return_tensors="pt").input_ids
+
+    # Generate output
+    generated_ids = model.generate(input_ids, max_length=1500)
+    generated_texts.append(tokenizer.decode(generated_ids[0], skip_special_tokens=True))
+
+# Combine the generated texts from all chunks
+final_output = " ".join(generated_texts)
+
+# Ensure the user query and the context from examples are handled correctly
+if "-- Your Query:" in final_output:
+    # Extract the relevant SQL query answer after the user query
+    relevant_output = final_output.split("-- Your Query:")[-1].strip()
+    print(relevant_output)
+else:
+    print(final_output)
