@@ -1,0 +1,159 @@
+from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
+
+# Load the model and tokenizer
+model_path = './t5'
+model = AutoModelForSeq2SeqLM.from_pretrained(model_path)
+tokenizer = AutoTokenizer.from_pretrained(model_path)
+
+# Define the schema and examples as smaller chunks
+schema_chunks = [
+    """
+    "Album" "AlbumId" int PRIMARY KEY, "Title" text, "ArtistId" int FOREIGN KEY, FOREIGN KEY (ArtistId) REFERENCES Artist(ArtistId)
+    [SEP] "Artist" "ArtistId" int PRIMARY KEY, "Name" text
+    [SEP] "Customer" "CustomerId" int PRIMARY KEY, "FirstName" text, "LastName" text, "Company" text, "Address" text, "City" text, "State" text, "Country" text, "PostalCode" text, "Phone" text, "Fax" text, "Email" text, "SupportRepId" int FOREIGN KEY, FOREIGN KEY (SupportRepId) REFERENCES Employee(EmployeeId)
+    """,
+    """
+    [SEP] "Employee" "EmployeeId" int PRIMARY KEY, "LastName" text, "FirstName" text, "Title" text, "ReportsTo" int FOREIGN KEY, "BirthDate" datetime, "HireDate" datetime, "Address" text, "City" text, "State" text, "Country" text, "PostalCode" text, "Phone" text, "Fax" text, "Email" text, FOREIGN KEY (ReportsTo) REFERENCES Employee(EmployeeId)
+    [SEP] "Genre" "GenreId" int PRIMARY KEY, "Name" text
+    [SEP] "Invoice" "InvoiceId" int PRIMARY KEY, "CustomerId" int FOREIGN KEY, "InvoiceDate" datetime, "BillingAddress" text, "BillingCity" text, "BillingState" text, "BillingCountry" text, "BillingPostalCode" text, "Total" numeric, FOREIGN KEY (CustomerId) REFERENCES Customer(CustomerId)
+    """,
+    """
+    [SEP] "InvoiceLine" "InvoiceLineId" int PRIMARY KEY, "InvoiceId" int FOREIGN KEY, "TrackId" int FOREIGN KEY, "UnitPrice" numeric, "Quantity" int, FOREIGN KEY (InvoiceId) REFERENCES Invoice(InvoiceId), FOREIGN KEY (TrackId) REFERENCES Track(TrackId)
+    [SEP] "MediaType" "MediaTypeId" int PRIMARY KEY, "Name" text
+    [SEP] "Playlist" "PlaylistId" int PRIMARY KEY, "Name" text
+    """,
+    """
+    [SEP] "PlaylistTrack" "PlaylistId" int FOREIGN KEY, "TrackId" int FOREIGN KEY, FOREIGN KEY (PlaylistId) REFERENCES Playlist(PlaylistId), FOREIGN KEY (TrackId) REFERENCES Track(TrackId)
+    [SEP] "Track" "TrackId" int PRIMARY KEY, "Name" text, "AlbumId" int FOREIGN KEY, "MediaTypeId" int FOREIGN KEY, "GenreId" int FOREIGN KEY, "Composer" text, "Milliseconds" int, "Bytes" int, "UnitPrice" numeric, FOREIGN KEY (AlbumId) REFERENCES Album(AlbumId), FOREIGN KEY (MediaTypeId) REFERENCES MediaType(MediaTypeId), FOREIGN KEY (GenreId) REFERENCES Genre(GenreId)
+    """
+]
+
+examples_chunks = [
+    """
+    -- Example 1: Get all tracks by a specific artist
+    SELECT A.Name AS ArtistName, T.Name AS TrackName FROM Artist A JOIN Album Al ON A.ArtistId = Al.ArtistId JOIN Track T ON Al.AlbumId = T.AlbumId WHERE A.Name = 'Specific Artist';
+
+    -- Example 2: Get customer invoices for customer with id 1
+    SELECT C.FirstName, C.LastName, I.InvoiceDate, I.Total FROM Customer C JOIN Invoice I ON C.CustomerId = I.CustomerId WHERE C.CustomerId = 1;
+
+    -- Example 3: Get playlist details including track information
+    SELECT P.Name AS PlaylistName, T.Name AS TrackName, T.Composer AS Composer FROM Playlist P JOIN PlaylistTrack PT ON P.PlaylistId = PT.PlaylistId JOIN Track T ON PT.TrackId = T.TrackId WHERE P.Name = 'Specific Playlist';
+    """,
+    """
+    -- Example 4: Get employee hierarchy
+    SELECT E1.FirstName AS Employee, E2.FirstName AS Manager FROM Employee E1 LEFT JOIN Employee E2 ON E1.ReportsTo = E2.EmployeeId;
+
+    -- Example 5: Get all albums and their tracks
+    SELECT Al.Title AS AlbumTitle, T.Name AS TrackName FROM Album Al JOIN Track T ON Al.AlbumId = T.AlbumId;
+
+    -- Example 6: Get all customers and their assigned support representatives
+    SELECT C.FirstName AS CustomerFirstName, C.LastName AS CustomerLastName, E.FirstName AS SupportRepFirstName, E.LastName AS SupportRepLastName FROM Customer C JOIN Employee E ON C.SupportRepId = E.EmployeeId;
+    """,
+    """
+    -- Example 7: Get the number of tracks per genre
+    SELECT G.Name AS GenreName, COUNT(T.TrackId) AS TrackCount FROM Genre G JOIN Track T ON G.GenreId = T.GenreId GROUP BY G.Name;
+
+    -- Example 8: give all the songs released by ac/dc
+    SELECT T.Name AS TrackName FROM Artist A JOIN Album Al ON A.ArtistId = Al.ArtistId JOIN Track T ON Al.AlbumId = T.AlbumId WHERE A.Name = 'AC/DC';
+
+    -- Example 9: most famous/listened song by frank sinatra
+    SELECT T.Name AS TrackName, COUNT(IL.TrackId) AS ListenCount FROM Artist A JOIN Album Al ON A.ArtistId = Al.ArtistId JOIN Track T ON Al.AlbumId = T.AlbumId JOIN InvoiceLine IL ON T.TrackId = IL.TrackId WHERE A.Name = 'Frank Sinatra' GROUP BY T.Name ORDER BY ListenCount DESC LIMIT 1;
+    """,
+    """
+    -- Example 10: Get all media types and their tracks
+    SELECT M.Name AS MediaTypeName, T.Name AS TrackName FROM MediaType M JOIN Track T ON M.MediaTypeId = T.MediaTypeId;
+
+    -- Example 11: all albums released by led zeppelin
+    SELECT Al.Title AS AlbumTitle FROM Artist A JOIN Album Al ON A.ArtistId = Al.ArtistId WHERE A.Name = 'Led Zeppelin';
+
+    -- Example 12: who released the album out of time 
+    SELECT A.Name AS ArtistName FROM Artist A JOIN Album Al ON A.ArtistId = Al.ArtistId WHERE Al.Title = 'Out of Time';
+    """,
+    """
+    -- Example 13: Get customers and their corresponding invoices
+    SELECT C.FirstName, C.LastName, I.InvoiceDate, I.Total FROM Customer C JOIN Invoice I ON C.CustomerId = I.CustomerId;
+
+    --Example 14: invoice for a person/customer named Daan Peeters
+    SELECT I.InvoiceId, I.InvoiceDate, I.Total FROM Customer C JOIN Invoice I ON C.CustomerId = I.CustomerId WHERE C.FirstName = 'Daan' AND C.LastName = 'Peeters';
+
+    -- Example 15: Get track details along with media type
+    SELECT T.Name AS TrackName, M.Name AS MediaTypeName FROM Track T JOIN MediaType M ON T.MediaTypeId = M.MediaTypeId;
+    """,
+    """
+    -- Example 16: Get all tracks and their genres
+    SELECT T.Name AS TrackName, G.Name AS GenreName FROM Track T JOIN Genre G ON T.GenreId = G.GenreId;
+
+    -- Example 17: Get all albums and their artists
+    SELECT Al.Title AS AlbumTitle, A.Name AS ArtistName FROM Album Al JOIN Artist A ON Al.ArtistId = A.ArtistId;
+
+    -- Example 18: Get all employees and their titles
+    SELECT E.FirstName AS EmployeeFirstName, E.LastName AS EmployeeLastName, E.Title AS EmployeeTitle FROM Employee E;
+    """,
+    """
+    -- Example 19: title of the employee andrew adams
+    SELECT E.Title FROM Employee E WHERE E.FirstName = 'Andrew' AND E.LastName = 'Adams';
+
+    -- Example 20: Get all playlists and their tracks
+    SELECT P.Name AS PlaylistName, T.Name AS TrackName FROM Playlist P JOIN PlaylistTrack PT ON P.PlaylistId = PT.PlaylistId JOIN Track T ON PT.TrackId = T.TrackId;
+
+    -- Example 21: Get all invoices and their total amounts
+    SELECT I.InvoiceId, I.Total FROM Invoice I;
+    """,
+    """
+    -- Example 22: total amount for invoice by the customer named frank haris
+    SELECT SUM(I.Total) AS TotalAmount FROM Customer C JOIN Invoice I ON C.CustomerId = I.CustomerId WHERE C.FirstName = 'Frank' AND C.LastName = 'Haris';
+
+    -- Example 23: Get all customers and their phone numbers
+    SELECT C.FirstName AS CustomerFirstName, C.LastName AS CustomerLastName, C.Phone AS CustomerPhone FROM Customer C;
+
+    -- Example 24: Get all tracks and their composers
+    SELECT T.Name AS TrackName, T.Composer AS TrackComposer FROM Track T;
+    """,
+    """
+    -- Example 25: composer of the track what it takes
+    SELECT T.Composer FROM Track T WHERE T.Name = 'What It Takes';
+
+    -- Example 26: Get all employees and their managers
+    SELECT E1.FirstName AS EmployeeFirstName, E1.LastName AS EmployeeLastName, E2.FirstName AS ManagerFirstName, E2.LastName AS ManagerFirstName FROM Employee E1 LEFT JOIN Employee E2 ON E1.ReportsTo = E2.EmployeeId;
+    
+    -- Example 27: manager of laura callahan
+    SELECT E2.FirstName AS ManagerFirstName, E2.LastName AS ManagerLastName FROM Employee E1 JOIN Employee E2 ON E1.ReportsTo = E2.EmployeeId WHERE E1.FirstName = 'Laura' AND E1.LastName = 'Callahan';
+    """,
+    """
+    -- Example 28: Get all customers and their support representatives
+    SELECT C.FirstName AS CustomerFirstName, C.LastName AS CustomerLastName, E.FirstName AS SupportRepFirstName, E.LastName AS SupportRepLastName FROM Customer C JOIN Employee E ON C.SupportRepId = E.EmployeeId;
+
+    -- Example 29: support representative for the customer daan peeters
+    SELECT E.FirstName AS SupportRepFirstName, E.LastName AS SupportRepLastName FROM Customer C JOIN Employee E ON C.SupportRepId = E.EmployeeId WHERE C.FirstName = 'Daan' AND C.LastName = 'Peeters';
+
+    -- Example 30: Get all albums and their track counts
+    SELECT Al.Title AS AlbumTitle, COUNT(T.TrackId) AS TrackCount FROM Album Al JOIN Track T ON Al.AlbumId = T.AlbumId GROUP BY Al.Title;
+    """,
+    """
+    -- Example 31: Get all invoices and their customers
+    SELECT I.InvoiceId, C.FirstName AS CustomerFirstName, C.LastName AS CustomerLastName FROM Invoice I JOIN Customer C ON I.CustomerId = C.CustomerId;
+
+    -- Example 32: Get all tracks and their lengths
+    SELECT T.Name AS TrackName, T.Milliseconds AS TrackLength FROM Track T;
+
+    -- Example 33: length of the track Breaking the rules
+    SELECT T.Milliseconds AS TrackLength FROM Track T WHERE T.Name = 'Breaking The Rules';
+    """
+]
+
+# Define the question
+question = "Get employee hierarchy"
+
+# Combine the schema and examples into a single input string
+input_string = " ".join(schema_chunks) + " [SEP] " + " ".join(examples_chunks) + " [SEP] " + question
+
+# Tokenize the input
+inputs = tokenizer.encode(input_string, return_tensors="pt", max_length=512, truncation=True)
+
+# Generate the output
+outputs = model.generate(inputs, max_length=512)
+
+# Decode the output
+sql_query = tokenizer.decode(outputs[0], skip_special_tokens=True)
+
+print(sql_query)
